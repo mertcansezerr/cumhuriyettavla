@@ -212,16 +212,18 @@ function meetText(sec){ return sec === 2 ? 'finalde' : sec === 4 ? 'yarı finald
 function storeGet(k){ try { return window.localStorage ? localStorage.getItem(k) : null; } catch(e){ return null; } }
 function storeSet(k, v){ try { if(window.localStorage){ if(v === null) localStorage.removeItem(k); else localStorage.setItem(k, v); } } catch(e){} }
 
+function liveMs(r){ return S.rounds[r].filter(function(x){ return !x.dead; }); }
 function roundName(r){
-  var slots = S.rounds[r].length * 2;
-  if(r === 0 && slots > 8 && S.rounds[0].some(function(x){ return x.bye; })) return '1. Tur';
-  if(slots === 2) return 'Final';
-  if(slots === 4) return 'Yarı Final';
-  if(slots === 8) return 'Çeyrek Final';
-  return 'Son ' + slots;
+  var R = S.rounds.length;
+  if(r === R-1) return 'Final';
+  if(r === R-2) return 'Yarı Final';
+  var ms = liveMs(r);
+  if(r === R-3 && ms.length === 4 && ms.every(function(x){ return !x.solo && !(r === 0 && x.bye); })) return 'Çeyrek Final';
+  return (r+1) + '. Tur';
 }
+function dispNum(r, m){ var n = 0; for(var i = 0; i <= m; i++) if(!S.rounds[r][i].dead) n++; return n; }
 function currentRound(){
-  for(var r=0;r<S.rounds.length;r++){ if(S.rounds[r].some(function(x){ return !x.w; })) return r; }
+  for(var r=0;r<S.rounds.length;r++){ if(S.rounds[r].some(function(x){ return !x.dead && !x.w; })) return r; }
   if(S.third && !S.third.w) return 't';
   return S.rounds.length - 1;
 }
@@ -229,12 +231,17 @@ function finalists(){
   var f = S.rounds[S.rounds.length-1][0];
   return { first: f.w, second: f.w ? (f.w === f.a ? f.b : f.a) : null };
 }
+function canClear(r, m){
+  var R = S.rounds.length;
+  if(S.third && r === R-2 && S.third.w && !S.third.bye) return false;
+  if(r+1 >= R) return true;
+  var nx = S.rounds[r+1][m>>1];
+  if(nx.solo) return canClear(r+1, m>>1);
+  return !nx.w;
+}
 function canUndo(r, m){
   var match = S.rounds[r][m]; if(!match.w || match.bye) return false;
-  var R = S.rounds.length;
-  if(r+1 < R){ var nx = S.rounds[r+1][m>>1]; if(nx.w) return false; }
-  if(S.third && r === R-2 && S.third.w && !S.third.bye) return false;
-  return true;
+  return canClear(r, m);
 }
 function canUndoThird(){ return !!(S.third && S.third.w && !S.third.bye); }
 
@@ -323,7 +330,8 @@ function slotLabel(ctx, side){
   if(ctx.key === 't') return 'Yarı Final · ' + (side === 'a' ? 1 : 2) + '. maçın kaybedeni';
   if(ctx.r === 0) return 'Rakipsiz · tur atlar';
   var pm = ctx.m*2 + (side === 'a' ? 0 : 1);
-  return roundName(ctx.r-1) + ' · ' + (pm+1) + '. maçın galibi';
+  var src = S.rounds[ctx.r-1][pm];
+  return roundName(ctx.r-1) + ' · ' + dispNum(ctx.r-1, pm) + '. ' + (src && src.solo ? 'bay geçen' : 'maçın galibi');
 }
 function meValid(){ return !!(ui.me && byId(ui.me.id)); }
 function meBlock(){
@@ -353,7 +361,7 @@ function row(id, match, side, ctx){
 }
 function matchCard(match, ctx, num){
   var st, undoBtn = '', flag = '';
-  if(match.bye) st = 'Tur atladı';
+  if(match.bye) st = 'Bay · tur atladı';
   else if(match.w) st = 'Oynandı' + (match.by ? ' · ' + esc(nameOf(match.by)) + ' girdi' : '');
   else if(match.a && match.b) st = (ui.admin || inMatch(match)) ? 'Oynanacak · kazanan kendi adına dokunsun' : 'Oynanacak';
   else st = 'Rakip bekleniyor';
@@ -372,52 +380,74 @@ function matchCard(match, ctx, num){
 function treeBox(match, r, m, extraCls){
   var cls = 'bm' + (extraCls ? ' ' + extraCls : '') + (meValid() && (match.a === ui.me.id || match.b === ui.me.id) ? ' mine' : '') + (!match.w && match.a && match.b ? ' live' : '');
   function nm(id, other){
-    if(!id) return '<div class="bn e">' + (match.bye && other ? 'rakipsiz' : '…') + '</div>';
+    if(!id) return '<div class="bn e">' + (match.solo || match.bye ? 'bay' : '…') + '</div>';
     var c = 'bn' + (match.w === id ? ' w' : (match.w ? ' l' : ''));
-    return '<div class="' + c + '"><span style="overflow:hidden;text-overflow:ellipsis">' + esc(nameOf(id)) + '</span>' + (match.w === id ? '<span class="sm">' + (match.bye ? 'bye' : 'W') + '</span>' : '') + '</div>';
+    return '<div class="' + c + '"><span style="overflow:hidden;text-overflow:ellipsis">' + esc(nameOf(id)) + '</span>' + (match.w === id ? '<span class="sm">' + (match.bye ? 'bay' : 'W') + '</span>' : '') + '</div>';
   }
   var key = (r === 't') ? 't' : r;
   return '<div class="' + cls + '" data-act="chip" data-r="' + key + '" role="button" tabindex="0" title="' + (m + 1) + '. maç">' + nm(match.a, match.b) + nm(match.b, match.a) + '</div>';
 }
-function treeGap(n, H, dir, join){
-  var h = '<svg class="tgap" width="22" height="' + H + '" viewBox="0 0 22 ' + H + '" aria-hidden="true">';
-  var cy = function(i){ return H * (2 * i + 1) / (2 * n); };
-  var st = 'stroke="var(--line)" stroke-width="2"';
-  var x0 = dir === 'L' ? 0 : 22, x1 = 11, x2 = dir === 'L' ? 22 : 0;
-  for(var i = 0; i < n; i++) h += '<line x1="' + x0 + '" y1="' + cy(i) + '" x2="' + x1 + '" y2="' + cy(i) + '" ' + st + '/>';
-  if(join){
-    for(var p = 0; p < n / 2; p++){
-      var y1 = cy(2 * p), y2 = cy(2 * p + 1), mid = (y1 + y2) / 2;
-      h += '<line x1="' + x1 + '" y1="' + y1 + '" x2="' + x1 + '" y2="' + y2 + '" ' + st + '/>';
-      h += '<line x1="' + x1 + '" y1="' + mid + '" x2="' + x2 + '" y2="' + mid + '" ' + st + '/>';
-    }
-  } else {
-    for(var q = 0; q < n; q++) h += '<line x1="' + x1 + '" y1="' + cy(q) + '" x2="' + x2 + '" y2="' + cy(q) + '" ' + st + '/>';
-  }
-  return h + '</svg>';
-}
 function treeView(){
   var R = S.rounds.length; if(!R) return '';
-  var CELL = 68;
-  var n1 = Math.max(1, S.rounds[0].length / 2);
-  var H = Math.round(n1 * CELL);
-  var labels = '', cols = '';
-  var r, ms, half;
+  var CELL = 68, BOX = 58, GAPW = 22;
+  var pos = {};
+  function key(r, m){ return r + ':' + m; }
+  function kids(r, m){
+    if(r === 0) return [];
+    var out = [];
+    [m*2, m*2+1].forEach(function(c){ var x = S.rounds[r-1][c]; if(x && !x.dead) out.push(c); });
+    return out;
+  }
+  function layout(r, m, ctr){
+    var ks = kids(r, m);
+    if(!ks.length){ var y = ctr.n * CELL + CELL / 2; ctr.n++; pos[key(r, m)] = y; return y; }
+    var ys = ks.map(function(c){ return layout(r-1, c, ctr); });
+    var yy = (Math.min.apply(null, ys) + Math.max.apply(null, ys)) / 2; pos[key(r, m)] = yy; return yy;
+  }
+  var L = {n:0}, Rt = {n:0};
+  if(R >= 2){ layout(R-2, 0, L); layout(R-2, 1, Rt); }
+  var H = Math.max(L.n, Rt.n, 1) * CELL;
+  // her iki yarıyı dikey ortala
+  var offL = (H - L.n * CELL) / 2, offR = (H - Rt.n * CELL) / 2;
+  function isLeft(r, m){ return m < S.rounds[r].length / 2; }
+  function y(r, m){ return pos[key(r, m)] + (isLeft(r, m) ? offL : offR); }
+  if(R >= 2) pos[key(R-1, 0)] = ((y(R-2, 0) + y(R-2, 1)) / 2);
+  else pos[key(0, 0)] = H / 2;
+  function yF(){ return pos[key(R-1, 0)]; }
+  function col(r, left){
+    var h = '<div class="tcol" style="height:' + H + 'px;position:relative;display:block">';
+    S.rounds[r].forEach(function(mt, m){
+      if(mt.dead || isLeft(r, m) !== left) return;
+      h += '<div style="position:absolute;left:0;right:0;top:' + Math.round(y(r, m) - BOX/2) + 'px">' + treeBox(mt, r, m, '') + '</div>';
+    });
+    return h + '</div>';
+  }
+  function gap(r, left){ // r -> r+1 arası çizgiler
+    var st = 'stroke="var(--line)" stroke-width="2" fill="none"';
+    var h = '<svg class="tgap" width="' + GAPW + '" height="' + H + '" viewBox="0 0 ' + GAPW + ' ' + H + '" aria-hidden="true">';
+    var x0 = left ? 0 : GAPW, x2 = left ? GAPW : 0, x1 = GAPW / 2;
+    S.rounds[r+1].forEach(function(pm, m){
+      if(pm.dead) return;
+      if(r+1 < R-1 && isLeft(r+1, m) !== left) return;
+      var py = (r+1 === R-1) ? yF() : y(r+1, m);
+      kids(r+1, m).forEach(function(c){
+        if(isLeft(r, c) !== left) return;
+        var cy = y(r, c);
+        h += '<path d="M' + x0 + ' ' + cy + ' H' + x1 + ' V' + py + ' H' + x2 + '" ' + st + '/>';
+      });
+    });
+    return h + '</svg>';
+  }
+  var labels = '', cols = '', r;
   for(r = 0; r < R - 1; r++){
-    ms = S.rounds[r]; half = ms.length / 2;
     labels += '<div class="tlabel">' + esc(roundName(r)) + '</div><div class="tlabel gap"></div>';
-    cols += '<div class="tcol" style="height:' + H + 'px">';
-    for(var i = 0; i < half; i++) cols += treeBox(ms[i], r, i, '');
-    cols += '</div>' + treeGap(half, H, 'L', half > 1);
+    cols += col(r, true) + gap(r, true);
   }
   labels += '<div class="tlabel">Final</div>';
-  cols += '<div class="tcol" style="height:' + H + 'px">' + treeBox(S.rounds[R - 1][0], R - 1, 0, 'final') + '</div>';
+  cols += '<div class="tcol" style="height:' + H + 'px;position:relative;display:block"><div style="position:absolute;left:0;right:0;top:' + Math.round(yF() - BOX/2) + 'px">' + treeBox(S.rounds[R - 1][0], R - 1, 0, 'final') + '</div></div>';
   for(r = R - 2; r >= 0; r--){
-    ms = S.rounds[r]; half = ms.length / 2;
     labels += '<div class="tlabel gap"></div><div class="tlabel">' + esc(roundName(r)) + '</div>';
-    cols += treeGap(half, H, 'R', half > 1) + '<div class="tcol" style="height:' + H + 'px">';
-    for(var j = half; j < ms.length; j++) cols += treeBox(ms[j], r, j, '');
-    cols += '</div>';
+    cols += gap(r, false) + col(r, false);
   }
   var third = S.third ? '<div class="tthird"><div class="tlabel">3.lük maçı</div>' + treeBox(S.third, 't', 0, '') + '</div>' : '';
   return '<section class="treewrap"><div class="treehead"><h2>Finale giden yol</h2><span class="hint">Sağa-sola kaydır · maça dokun</span></div>'
@@ -427,7 +457,7 @@ function chips(){
   var h = '<div class="chips" role="tablist" aria-label="Turlar">';
   for(var r=0;r<S.rounds.length;r++){
     var total = 0, done = 0;
-    S.rounds[r].forEach(function(x){ if(!x.bye){ total++; if(x.w) done++; } });
+    S.rounds[r].forEach(function(x){ if(!x.bye && !x.dead && !x.solo){ total++; if(x.w) done++; } });
     h += '<button class="chip' + (ui.round === r ? ' on' : '') + '" role="tab" aria-selected="' + (ui.round === r) + '" data-act="chip" data-r="' + r + '">' + esc(roundName(r)) + '<span class="n">' + done + '/' + total + '</span></button>';
   }
   if(S.third){
@@ -454,8 +484,10 @@ function liveView(){
     h += '<h2>3.lük Maçı</h2>' + matchCard(S.third, {key:'t'}, 1);
   } else {
     var r = ui.round;
-    h += '<h2>' + esc(roundName(r)) + '<span class="cnt">' + S.rounds[r].length + ' maç</span></h2>';
-    S.rounds[r].forEach(function(mt, m){ h += matchCard(mt, {key: r + ':' + m, r: r, m: m}, m+1); });
+    var lm = liveMs(r), nb = lm.filter(function(x){ return x.solo; }).length;
+    h += '<h2>' + esc(roundName(r)) + '<span class="cnt">' + (lm.length - nb) + ' maç' + (nb ? ' · ' + nb + ' bay' : '') + '</span></h2>';
+    var num = 0;
+    S.rounds[r].forEach(function(mt, m){ if(mt.dead) return; num++; h += matchCard(mt, {key: r + ':' + m, r: r, m: m}, num); });
   }
   h += '</div>';
   h += '<div class="notice">Maçın bitince kendi maçında kendi adına dokunup "Evet, kaydet" de; bir üst tur kendiliğinden oluşur. Rakibin yanlış girdiyse "İtiraz et" de, organizatör düzeltir. Sayfa 10 saniyede bir kendini günceller.</div>';
