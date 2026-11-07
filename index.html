@@ -659,24 +659,46 @@ function loadOcr(cb){
   sc.onerror = function(){ var l = ocrLoading; ocrLoading = null; l.forEach(function(f){ f(new Error('load')); }); };
   document.head.appendChild(sc);
 }
-function cleanName(s){
-  s = String(s || '').replace(/[\t|]+/g, ' ').replace(/^[\s\-\*•·►▪\d\.\)\(:@©®]+/, '').replace(/[\s\-\*•·:]+$/, '').replace(/\s+/g, ' ').trim();
-  if(!s) return '';
-  if(/^siz$/i.test(s)) return OWNER_NAME;
-  if(/\d/.test(s)) return '';
-  if(s.length < 3 || s.length > 40) return '';
-  if(s.split(' ').length < 2) return '';
-  if(/^(anket detayları|anket|tavla|bugün|dün)/i.test(s)) return '';
-  if(/(dakika|saat|gün|hafta) önce$/i.test(s)) return '';
-  if(!/^[A-Za-zÇĞİÖŞÜçğıöşüÂâÎîÛû][A-Za-zÇĞİÖŞÜçğıöşüÂâÎîÛû'\.\- ]*$/.test(s)) return '';
-  return s;
+var NAME_TOKEN = /^[A-ZÇĞİÖŞÜÂÎÛ][a-zçğıöşüâîû'\.\-]*(?:[A-ZÇĞİÖŞÜ][a-zçğıöşüâîû'\.\-]+)*$/;
+var TS_RE = /(bugün|bugun|dün|dun|today|yesterday)\s*\d{1,2}\s*[:.]?\s*\d{2}|\b\d{1,2}[.\/]\d{1,2}[.\/]\d{2,4}\b|\b(pazartesi|salı|çarşamba|perşembe|cuma|cumartesi|pazar)\b\s*\d{1,2}[:.]\d{2}/i;
+function cleanName(s, loose){
+  s = String(s || '').replace(/[\t|]+/g, ' ');
+  // @kullanıcı / ©kullanıcı etiketi ve sonrası
+  s = s.replace(/\s[@©®][^\s]*.*$/, '');
+  var toks = s.split(/\s+/).filter(Boolean).map(function(t){ return t.replace(/^[~“”"'‘’«»<>\(\)\[\]\{\}\*•·►▪:;,\.\-]+|[“”"'‘’«»<>\(\)\[\]\{\}\*•·►▪:;,\.\-]+$/g, ''); }).filter(Boolean);
+  if(toks.length === 1 && /^siz$/i.test(toks[0])) return OWNER_NAME;
+  // baştaki ve sondaki gürültüyü at (kısa / küçük harfli / rakamlı / büyük harf olmayan parçalar)
+  function good(t){ return t.length >= 3 && NAME_TOKEN.test(t); }
+  while(toks.length && !good(toks[0])) toks.shift();
+  while(toks.length && !good(toks[toks.length - 1])) toks.pop();
+  if(!toks.length) return '';
+  if(toks.some(function(t){ return /\d/.test(t); })) return '';
+  // "CevatMertUzer" -> "Cevat Mert Uzer"
+  toks = toks.join(' ').replace(/([a-zçğıöşüâîû])([A-ZÇĞİÖŞÜ])/g, '$1 $2').split(' ');
+  var s2 = toks.join(' ');
+  if(/^siz$/i.test(s2)) return OWNER_NAME;
+  if(s2.length < 3 || s2.length > 40 || toks.length > 5) return '';
+  if(!loose && toks.length < 2) return '';
+  if(/^(anket detayları|anket|tavla|bugün|dün|oy|oylar|sil)$/i.test(s2) || /^anket/i.test(s2)) return '';
+  return s2;
 }
 function parseNames(text){
+  var lines = String(text).split(/\r?\n/).map(function(l){ return l.trim(); }).filter(Boolean);
   var out = [], seen = {};
-  String(text).split(/\r?\n/).forEach(function(line){
-    var n = cleanName(line); if(!n) return;
-    var k = n.toLocaleLowerCase('tr'); if(seen[k]) return; seen[k] = true; out.push(n);
+  function push(n){ var k = n.toLocaleLowerCase('tr'); if(seen[k]) return; seen[k] = true; out.push(n); }
+  var anchors = 0;
+  lines.forEach(function(l, i){
+    if(!TS_RE.test(l)) return;
+    anchors++;
+    // zaman satırının hemen üstündeki isim satırı (en fazla 3 satır geri bak)
+    for(var j = i - 1; j >= 0 && j >= i - 3; j--){
+      if(TS_RE.test(lines[j])) break;
+      var n = cleanName(lines[j], true);
+      if(n){ push(n); break; }
+    }
   });
+  if(anchors >= 2) return out;
+  lines.forEach(function(l){ var n = cleanName(l, false); if(n) push(n); });
   return out;
 }
 function mergeOcrNames(names){
@@ -705,24 +727,35 @@ function ocrFromFiles(files){
     var url = URL.createObjectURL(file);
     img.onload = function(){
       try {
-        var max = 1600, w = img.width, h = img.height, sc = Math.min(1, max / Math.max(w, h));
-        var cv = document.createElement('canvas'); cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
+        var tw = 1200, sc = tw / img.width, W = tw, H = Math.round(img.height * sc);
+        var cv = document.createElement('canvas'); cv.width = W; cv.height = H;
         var ctx = cv.getContext('2d');
-        ctx.drawImage(img, 0, 0, cv.width, cv.height);
+        ctx.drawImage(img, 0, 0, W, H);
         URL.revokeObjectURL(url);
-        var id = ctx.getImageData(0, 0, cv.width, cv.height), d = id.data, sum = 0, cnt = 0;
+        var id = ctx.getImageData(0, 0, W, H), d = id.data, sum = 0, cnt = 0;
         for(var i = 0; i < d.length; i += 40){ sum += (d[i] * 299 + d[i+1] * 587 + d[i+2] * 114) / 1000; cnt++; }
         if(cnt && sum / cnt < 110){
           for(var j = 0; j < d.length; j += 4){ d[j] = 255 - d[j]; d[j+1] = 255 - d[j+1]; d[j+2] = 255 - d[j+2]; }
           ctx.putImageData(id, 0, 0);
         }
+        // uzun ekran görüntülerini üst üste binen dilimlere böl
+        var strips = [], SH = 1100, STEP = 950;
+        for(var y = 0; y < H; y += STEP){
+          var h2 = Math.min(SH, H - y), sv = document.createElement('canvas'); sv.width = W; sv.height = h2;
+          sv.getContext('2d').drawImage(cv, 0, y, W, h2, 0, 0, W, h2); strips.push(sv);
+          if(y + SH >= H) break;
+        }
         loadOcr(function(err){
           if(err){ failed++; toast('Okuma aracı yüklenemedi, internetini kontrol et.'); next(); return; }
-          window.Tesseract.recognize(cv, 'tur').then(function(r){
-            var names = parseNames((r && r.data && r.data.text) || '');
-            var before = ui.ocrNames.length; ui.ocrNames = mergeOcrNames(names); found += ui.ocrNames.length - before;
-            next();
-          }, function(){ failed++; next(); });
+          var texts = [], k = 0;
+          (function step(){
+            if(k >= strips.length){
+              var names = parseNames(texts.join('\n'));
+              var before = ui.ocrNames.length; ui.ocrNames = mergeOcrNames(names); found += ui.ocrNames.length - before;
+              next(); return;
+            }
+            window.Tesseract.recognize(strips[k++], 'tur').then(function(r){ texts.push((r && r.data && r.data.text) || ''); step(); }, function(){ step(); });
+          })();
         });
       } catch(e){ failed++; toast('Fotoğraf işlenemedi: ' + e.message); next(); }
     };
