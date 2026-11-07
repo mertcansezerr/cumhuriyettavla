@@ -331,6 +331,7 @@ function slotLabel(ctx, side){
   if(ctx.r === 0) return 'Rakipsiz · tur atlar';
   var pm = ctx.m*2 + (side === 'a' ? 0 : 1);
   var src = S.rounds[ctx.r-1][pm];
+  if(src && src.dead) return 'Bay · rakip yok';
   return roundName(ctx.r-1) + ' · ' + dispNum(ctx.r-1, pm) + '. ' + (src && src.solo ? 'bay geçen' : 'maçın galibi');
 }
 function meValid(){ return !!(ui.me && byId(ui.me.id)); }
@@ -362,6 +363,7 @@ function row(id, match, side, ctx){
 function matchCard(match, ctx, num){
   var st, undoBtn = '', flag = '';
   if(match.bye) st = 'Bay · tur atladı';
+  else if(match.solo) st = 'Bay · rakipsiz tur atlayacak';
   else if(match.w) st = 'Oynandı' + (match.by ? ' · ' + esc(nameOf(match.by)) + ' girdi' : '');
   else if(match.a && match.b) st = (ui.admin || inMatch(match)) ? 'Oynanacak · kazanan kendi adına dokunsun' : 'Oynanacak';
   else st = 'Rakip bekleniyor';
@@ -379,13 +381,16 @@ function matchCard(match, ctx, num){
 }
 function treeBox(match, r, m, extraCls){
   var cls = 'bm' + (extraCls ? ' ' + extraCls : '') + (meValid() && (match.a === ui.me.id || match.b === ui.me.id) ? ' mine' : '') + (!match.w && match.a && match.b ? ' live' : '');
-  function nm(id, other){
-    if(!id) return '<div class="bn e">' + (match.solo || match.bye ? 'bay' : '…') + '</div>';
+  function nm(id, other, side){
+    if(!id){
+      var emptyBye = match.solo && (r === 0 || (r !== 't' && S.rounds[r-1][m*2 + side].dead));
+      return '<div class="bn e">' + (emptyBye ? 'bay' : '…') + '</div>';
+    }
     var c = 'bn' + (match.w === id ? ' w' : (match.w ? ' l' : ''));
     return '<div class="' + c + '"><span style="overflow:hidden;text-overflow:ellipsis">' + esc(nameOf(id)) + '</span>' + (match.w === id ? '<span class="sm">' + (match.bye ? 'bay' : 'W') + '</span>' : '') + '</div>';
   }
   var key = (r === 't') ? 't' : r;
-  return '<div class="' + cls + '" data-act="chip" data-r="' + key + '" role="button" tabindex="0" title="' + (m + 1) + '. maç">' + nm(match.a, match.b) + nm(match.b, match.a) + '</div>';
+  return '<div class="' + cls + '" data-act="chip" data-r="' + key + '" role="button" tabindex="0" title="' + (m + 1) + '. maç">' + nm(match.a, match.b, 0) + nm(match.b, match.a, 1) + '</div>';
 }
 function treeView(){
   var R = S.rounds.length; if(!R) return '';
